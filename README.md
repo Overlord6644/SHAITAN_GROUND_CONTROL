@@ -90,17 +90,27 @@ Ground Control Station software for the SHAITAN rocket project, providing real-t
 ### 3D Model
 Place the `AIM-9_Sidewinder.stl` file in the same directory as the script for 3D orientation visualization.
 
-## Rocket Firmware
+## Related Firmware
 
-This Ground Control Station is designed to work with the SHAITAN rocket avionics system. The rocket firmware is available at:
+This Ground Control Station is designed to work with the SHAITAN rocket avionics ecosystem:
 
+### Rocket Flight Computer (Main Avionics)
 **[https://github.com/Overlord6644/SAS-shaitanAv](https://github.com/Overlord6644/SAS-shaitanAv)**
 
-The firmware handles:
+The main flight computer firmware handles:
 - Sensor data acquisition (IMU, barometer, GPS)
 - State machine management
-- Telemetry transmission via LoRa
 - Flight control and recovery system deployment
+- Telemetry transmission via LoRa to ground station
+
+### Ground Station Receiver (LoRa Transceiver)
+**[https://github.com/Overlord6644/SHAITAN_GCS_Firmware](https://github.com/Overlord6644/SHAITAN_GCS_Firmware)**
+
+The ground station receiver firmware handles:
+- LoRa radio reception of telemetry from the rocket
+- Serial communication forwarding to this GCS software
+- Two-way communication for launch commands
+- RSSI and SNR signal quality reporting
 
 ## License
 
