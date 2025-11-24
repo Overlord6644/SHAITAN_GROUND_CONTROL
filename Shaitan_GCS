@@ -1,0 +1,942 @@
+#!/usr/bin/env python3
+
+# ----------------------------
+# User Interface Configuration
+# ----------------------------
+WINDOW_TITLE              = "SHAITAN_GCS_1.0"
+GROUP_CALIBRATION_TITLE   = "IMU Calibration"
+GROUP_TELEMETRY_TITLE     = "Telemetry"
+TAB_3D_ORIENTATION        = "3D Orientation"
+TAB_GPS                   = "3D GPS Map"
+TAB_GRAPH                 = "Graphs"
+
+LABEL_PORT                = "COM Port:"
+LABEL_STATE               = "State Machine: N/A"
+BUTTON_CONNECT_TEXT       = "Connect"
+BUTTON_DISCONNECT_TEXT    = "Disconnect"
+BUTTON_LAUNCH_TEXT        = "Launch"
+BUTTON_SIMULATE_TEXT      = "Simulate Launch"
+BUTTON_RESTART_TEXT       = "Restart"
+
+PLOT_TITLE_LIN_ACCEL      = "Linear Acceleration"
+PLOT_TITLE_ABS_ACCEL      = "Absolute Acceleration"
+PLOT_TITLE_GYROSCOPE      = "Gyroscope"
+PLOT_TITLE_ALTITUDE       = "Altitude"
+PLOT_TITLE_GPS_SPEED      = "GPS Speed"
+
+AXIS_COLOR_X              = (1, 0, 0)    # Red
+AXIS_COLOR_Y              = (0, 1, 0)    # Green
+AXIS_COLOR_Z              = (0, 0, 1)    # Blue
+
+GRAPH_COLOR_LIN_ACCEL_X   = 'r'
+GRAPH_COLOR_LIN_ACCEL_Y   = 'g'
+GRAPH_COLOR_LIN_ACCEL_Z   = 'b'
+GRAPH_COLOR_ABS_ACCEL_X   = 'r'
+GRAPH_COLOR_ABS_ACCEL_Y   = 'g'
+GRAPH_COLOR_ABS_ACCEL_Z   = 'b'
+GRAPH_COLOR_GYRO_X        = 'r'
+GRAPH_COLOR_GYRO_Y        = 'g'
+GRAPH_COLOR_GYRO_Z        = 'b'
+GRAPH_COLOR_ALT_GPS       = 'r'
+GRAPH_COLOR_ALT_ATMO      = 'g'
+GRAPH_COLOR_GPS_SPEED     = 'y'
+
+
+# ----------------------------
+# Example message for parsing
+# ----------------------------
+EXAMPLE_MESSAGE = "Telem:0,23638,PRELAUNCH,0.02,-0.09,-0.42,-0.01,-0.91,9.34,-9.19,-3.06,-0.31,281.44,-0.19,4.75,0.77,-0.03,-0.03,0.63,91.00,-78.48,84.19,90.20,483.51,-0.45,953.16,32.67,7.57,0,0,0,NoFix,0,0,0.0000000,0.0000000,0.00,-17.00,99.99,0.00,0.00,19800106,8"
+EXAMPLE_RSSI = "RSSI: -23 dBm, SNR: 5.25 dB"
+
+
+# ----------------------------
+# Other constants & configurations
+# ----------------------------
+HEADER_FIELDS = [
+    "Number", "Time(ms)", "State",
+    "linAccel_x (m/s²)", "linAccel_y (m/s²)", "linAccel_z (m/s²)",
+    "absAccel_x (m/s²)", "absAccel_y (m/s²)", "absAccel_z (m/s²)",
+    "gyro_x (°/s)", "gyro_y (°/s)", "gyro_z (°/s)",
+    "euler_x (°)", "euler_y (°)", "euler_z (°)",
+    "quat_w", "quat_x", "quat_y", "quat_z",
+    "eulerOffset_x (°)", "eulerOffset_y (°)", "eulerOffset_z (°)",
+    "deviationAngle (°)",
+    "altitude (m)", "relativeAltitude (m)", "pressure (hPa)", "temp (°C)",
+    "voltage (V)", "contPyro1", "contPyro2", "chuteCheckIn",
+    # GPS fields currently enabled:
+    "fixDesc",
+    "solutionValid",
+    "satellites",
+    "longitude (°)",
+    "latitude (°)",
+    "heightEllipsoid (m)",
+    "heightMSL (m)",
+    "hdop",
+    "speed (m/s)",
+    "heading (°)",
+    "date (YYYYMMDD)",
+    "time (hhmmss)"
+]
+header_fields = HEADER_FIELDS.copy()
+
+# Commands and states
+LAUNCH_COMMAND   = b'LAUNCH'
+RESTART_COMMAND  = b'RESTART'
+SIMULATION_STATE = "SIMULATION"
+
+# 3D rendering configuration
+OFFSET_QUAT = [0.70710678, -0.70710678, 0.0, 0.0]
+
+# 3D GPS map configuration
+DEFAULT_LAT = 46.806
+DEFAULT_LON = 7.161
+DEFAULT_ALT = 700
+
+# Load Cesium token from config file
+import json
+try:
+    with open('config.json', 'r') as f:
+        config = json.load(f)
+        CESIUM_TOKEN = config.get('cesium_token', '')
+except FileNotFoundError:
+    print("Warning: config.json not found. Please copy config.example.json to config.json and add your Cesium token.")
+    CESIUM_TOKEN = ""
+except json.JSONDecodeError:
+    print("Warning: config.json is not valid JSON.")
+    CESIUM_TOKEN = ""
+
+# Other configurations
+SERIAL_BAUDRATE           = 115200
+COM_PORT_UPDATE_INTERVAL  = 2000   # ms
+SIMULATION_INTERVAL       = 200    # ms
+
+# ----------------------------
+# Utility Functions
+# ----------------------------
+import numpy as np
+def quaternion_multiply(q1, q2):
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return np.array([
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2
+    ])
+
+def quaternion_conjugate(q):
+    w, x, y, z = q
+    return np.array([w, -x, -y, -z])
+
+def quaternion_to_rotation_matrix(q):
+    q = q / np.linalg.norm(q)
+    w, x, y, z = q
+    return np.array([
+        [1 - 2*y*y - 2*z*z,   2*x*y - 2*z*w,       2*x*z + 2*y*w],
+        [2*x*y + 2*z*w,       1 - 2*x*x - 2*z*z,   2*y*z - 2*x*w],
+        [2*x*z - 2*y*w,       2*y*z + 2*x*w,       1 - 2*x*x - 2*y*y]
+    ], dtype=np.float32)
+
+# ----------------------------
+# Other Imports
+# ----------------------------
+import sys, time, datetime, os, re, json
+from PyQt5 import QtCore, QtWidgets
+from PyQt5.QtWidgets import QOpenGLWidget, QTabWidget
+from PyQt5.QtWebEngineWidgets import QWebEngineView, QWebEngineSettings
+import serial
+from serial.tools import list_ports
+from stl import mesh
+from OpenGL.GL import *
+from OpenGL.GLU import *
+import pyqtgraph as pg
+
+# ----------------------------
+# Function to draw axes in OpenGL
+# ----------------------------
+def draw_axes():
+    glLineWidth(2.0)
+    glBegin(GL_LINES)
+    glColor3f(*AXIS_COLOR_X)
+    glVertex3f(0, 0, 0)
+    glVertex3f(5, 0, 0)
+    glColor3f(*AXIS_COLOR_Y)
+    glVertex3f(0, 0, 0)
+    glVertex3f(0, 5, 0)
+    glColor3f(*AXIS_COLOR_Z)
+    glVertex3f(0, 0, 0)
+    glVertex3f(0, 0, 5)
+    glEnd()
+
+# ----------------------------
+# Class Definitions
+# ----------------------------
+
+# Serial reading thread
+class SerialReader(QtCore.QThread):
+    new_message = QtCore.pyqtSignal(str)
+    def __init__(self, ser, parent=None):
+        super().__init__(parent)
+        self.ser = ser
+        self.running = True
+        self.sleep_time = 0.005
+    def run(self):
+        while self.running:
+            try:
+                if self.ser.in_waiting:
+                    line = self.ser.readline().decode('utf-8', errors='replace').strip()
+                    if line:
+                        self.new_message.emit(line)
+            except Exception as e:
+                self.new_message.emit("Serial read error: " + str(e))
+            time.sleep(self.sleep_time)
+    def stop(self):
+        self.running = False
+        self.quit()
+        self.wait()
+
+# Shared signals for telemetry
+class TelemetrySignals(QtCore.QObject):
+    telemetryParsed = QtCore.pyqtSignal(dict)
+    stateUpdate = QtCore.pyqtSignal(str)
+    calibrationUpdate = QtCore.pyqtSignal(dict)
+    rawMessage = QtCore.pyqtSignal(str)
+
+# Worker to process "Telem:" messages in CSV format
+class TelemetryWorker(QtCore.QRunnable):
+    def __init__(self, msg, signals):
+        super().__init__()
+        self.msg = msg
+        self.signals = signals
+    def run(self):
+        values = self.msg[len("Telem:"):].strip().split(",")
+        if len(values) >= len(header_fields):
+            telemetry = {header_fields[i]: values[i] for i in range(len(header_fields))}
+            self.signals.telemetryParsed.emit(telemetry)
+        else:
+            self.signals.rawMessage.emit("Incomplete telemetry packet: " + self.msg)
+
+# OpenGL widget for 3D rendering of STL model ("3D Orientation" tab)
+class GLModelWidget(QOpenGLWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.q = np.array([1.0, 0.0, 0.0, 0.0])
+        self.offset_quat = np.array(OFFSET_QUAT)
+        self.stl_model = None
+    def initializeGL(self):
+        glClearColor(0.1, 0.1, 0.1, 1.0)
+        glEnable(GL_DEPTH_TEST)
+        try:
+            STL_FILE = "AIM-9_Sidewinder.stl"
+            self.stl_model = mesh.Mesh.from_file(STL_FILE)
+            centroid = np.mean(self.stl_model.vectors, axis=(0,1))
+            self.stl_model.vectors -= centroid
+        except Exception as e:
+            print("STL loading error:", e)
+    def resizeGL(self, w, h):
+        glViewport(0, 0, w, h)
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        gluPerspective(45.0, float(w)/float(h if h>0 else 1), 0.1, 100.0)
+        glMatrixMode(GL_MODELVIEW)
+    def paintGL(self):
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        glLoadIdentity()
+        glTranslatef(0.0, 0.0, -20)
+        q_disp = quaternion_multiply(self.offset_quat, self.q)
+        R = quaternion_to_rotation_matrix(q_disp)
+        rot_mat = np.eye(4, dtype=np.float32)
+        rot_mat[:3, :3] = R
+        glMultMatrixf(rot_mat.T.flatten())
+        if self.stl_model is not None:
+            glColor3f(0.8, 0.8, 0.8)
+            glBegin(GL_TRIANGLES)
+            for face in self.stl_model.vectors:
+                for vertex in face:
+                    glVertex3fv(vertex)
+            glEnd()
+        draw_axes()
+    @QtCore.pyqtSlot(dict)
+    def updateOrientation(self, telemetry):
+        try:
+            w = float(telemetry.get("quat_w", 1))
+            x = float(telemetry.get("quat_x", 0))
+            y = float(telemetry.get("quat_y", 0))
+            z = float(telemetry.get("quat_z", 0))
+            self.q = np.array([w, x, y, z])
+        except Exception as e:
+            print("updateOrientation error:", e)
+        self.update()
+
+# CesiumMapWidget for 3D GPS map ("3D GPS Map" tab)
+class CesiumMapWidget(QWebEngineView):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.page().settings().setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)
+        self.page().settings().setAttribute(QWebEngineSettings.LocalContentCanAccessRemoteUrls, True)
+        self.setHtml(self.html_content())
+    def html_content(self):
+        return f"""
+        <!DOCTYPE html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8" />
+            <title>3D GPS Map</title>
+            <script src="https://cesium.com/downloads/cesiumjs/releases/1.102/Build/Cesium/Cesium.js"></script>
+            <link href="https://cesium.com/downloads/cesiumjs/releases/1.102/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+            <style>
+              html, body, #cesiumContainer {{
+                width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
+              }}
+            </style>
+          </head>
+          <body>
+            <div id="cesiumContainer"></div>
+            <script>
+              Cesium.Ion.defaultAccessToken = '{CESIUM_TOKEN}';
+              var viewer = new Cesium.Viewer('cesiumContainer', {{
+                terrainProvider: Cesium.createWorldTerrain()
+              }});
+              var defaultLat = {DEFAULT_LAT};
+              var defaultLon = {DEFAULT_LON};
+              var defaultAlt = {DEFAULT_ALT};
+              viewer.camera.setView({{
+                destination: Cesium.Cartesian3.fromDegrees(defaultLon, defaultLat, defaultAlt)
+              }});
+              viewer.homeButton.viewModel.command.beforeExecute.addEventListener(function(e) {{
+                  e.cancel = true;
+                  viewer.camera.flyTo({{
+                       destination: Cesium.Cartesian3.fromDegrees(defaultLon, defaultLat, defaultAlt)
+                  }});
+              }});
+              var rocketEntity = viewer.entities.add({{
+                  name: 'Rocket',
+                  position: Cesium.Cartesian3.fromDegrees(defaultLon, defaultLat, defaultAlt),
+                  point: {{
+                      pixelSize: 10,
+                      color: Cesium.Color.RED
+                  }},
+                  label: {{
+                      text: 'Rocket',
+                      font: '16px sans-serif',
+                      fillColor: Cesium.Color.WHITE,
+                      style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                      outlineWidth: 2,
+                      verticalOrigin: Cesium.VerticalOrigin.TOP,
+                      pixelOffset: new Cesium.Cartesian2(0, 12)
+                  }}
+              }});
+              var pathEntity = viewer.entities.add({{
+                  id: "gpsPath",
+                  polyline: {{
+                      positions: [],
+                      width: 3,
+                      material: Cesium.Color.YELLOW
+                  }}
+              }});
+              var gpsPathPositions = [];
+              function updateMarker(lat, lon, alt) {{
+                  var pos = Cesium.Cartesian3.fromDegrees(lon, lat, alt);
+                  rocketEntity.position = pos;
+                  gpsPathPositions.push(lon, lat, alt);
+                  pathEntity.polyline.positions = Cesium.Cartesian3.fromDegreesArrayHeights(gpsPathPositions);
+              }}
+            </script>
+          </body>
+        </html>
+        """
+    def updateMarker(self, lat, lon, alt):
+        js_code = f"updateMarker({lat}, {lon}, {alt});"
+        self.page().runJavaScript(js_code)
+
+# GraphWidget to display real-time graphs ("Graphs" tab)
+class GraphWidget(QtWidgets.QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.times = []
+        self.linAccel_x = []
+        self.linAccel_y = []
+        self.linAccel_z = []
+        self.absAccel_x = []
+        self.absAccel_y = []
+        self.absAccel_z = []
+        self.gyro_x = []
+        self.gyro_y = []
+        self.gyro_z = []
+        self.altitudeGPS = []
+        self.altitude = []
+        self.gps_speed = []
+        layout = QtWidgets.QVBoxLayout(self)
+        self.plot_lin = pg.PlotWidget(title=PLOT_TITLE_LIN_ACCEL)
+        self.plot_lin.setLabel('left', 'Acc (m/s²)')
+        self.plot_lin.setLabel('bottom', 'Time (s)')
+        self.plot_lin.addLegend()
+        self.plot_abs = pg.PlotWidget(title=PLOT_TITLE_ABS_ACCEL)
+        self.plot_abs.setLabel('left', 'Acc (m/s²)')
+        self.plot_abs.setLabel('bottom', 'Time (s)')
+        self.plot_abs.addLegend()
+        self.plot_gyro = pg.PlotWidget(title=PLOT_TITLE_GYROSCOPE)
+        self.plot_gyro.setLabel('left', 'Angular velocity (°/s)')
+        self.plot_gyro.setLabel('bottom', 'Time (s)')
+        self.plot_gyro.addLegend()
+        self.plot_alt = pg.PlotWidget(title=PLOT_TITLE_ALTITUDE)
+        self.plot_alt.setLabel('left', 'Altitude (m)')
+        self.plot_alt.setLabel('bottom', 'Time (s)')
+        self.plot_alt.addLegend()
+        self.plot_speed = pg.PlotWidget(title=PLOT_TITLE_GPS_SPEED)
+        self.plot_speed.setLabel('left', 'Speed (m/s)')
+        self.plot_speed.setLabel('bottom', 'Time (s)')
+        self.plot_speed.addLegend()
+        layout.addWidget(self.plot_lin)
+        layout.addWidget(self.plot_abs)
+        layout.addWidget(self.plot_gyro)
+        layout.addWidget(self.plot_alt)
+        layout.addWidget(self.plot_speed)
+        self.curve_lin_x = self.plot_lin.plot(pen=GRAPH_COLOR_LIN_ACCEL_X, name="linAccel_x")
+        self.curve_lin_y = self.plot_lin.plot(pen=GRAPH_COLOR_LIN_ACCEL_Y, name="linAccel_y")
+        self.curve_lin_z = self.plot_lin.plot(pen=GRAPH_COLOR_LIN_ACCEL_Z, name="linAccel_z")
+        self.curve_abs_x = self.plot_abs.plot(pen=GRAPH_COLOR_ABS_ACCEL_X, name="absAccel_x")
+        self.curve_abs_y = self.plot_abs.plot(pen=GRAPH_COLOR_ABS_ACCEL_Y, name="absAccel_y")
+        self.curve_abs_z = self.plot_abs.plot(pen=GRAPH_COLOR_ABS_ACCEL_Z, name="absAccel_z")
+        self.curve_gyro_x = self.plot_gyro.plot(pen=GRAPH_COLOR_GYRO_X, name="gyro_x")
+        self.curve_gyro_y = self.plot_gyro.plot(pen=GRAPH_COLOR_GYRO_Y, name="gyro_y")
+        self.curve_gyro_z = self.plot_gyro.plot(pen=GRAPH_COLOR_GYRO_Z, name="gyro_z")
+        self.curve_altGPS = self.plot_alt.plot(pen=GRAPH_COLOR_ALT_GPS, name="GPS Altitude")
+        self.curve_relAlt = self.plot_alt.plot(pen=GRAPH_COLOR_ALT_ATMO, name="Atmospheric Altitude")
+        self.curve_speed = self.plot_speed.plot(pen=GRAPH_COLOR_GPS_SPEED, name="GPS Speed")
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self.update_plots)
+        self.timer.start(100)
+    @QtCore.pyqtSlot(dict)
+    def update_data(self, telemetry):
+        try:
+            t = float(telemetry.get("Time(ms)", 0))
+            ax = float(telemetry.get("linAccel_x (m/s²)", 0))
+            ay = float(telemetry.get("linAccel_y (m/s²)", 0))
+            az = float(telemetry.get("linAccel_z (m/s²)", 0))
+            aax = float(telemetry.get("absAccel_x (m/s²)", 0))
+            aay = float(telemetry.get("absAccel_y (m/s²)", 0))
+            aaz = float(telemetry.get("absAccel_z (m/s²)", 0))
+            gx = float(telemetry.get("gyro_x (°/s)", 0))
+            gy = float(telemetry.get("gyro_y (°/s)", 0))
+            gz = float(telemetry.get("gyro_z (°/s)", 0))
+            altGPS = float(telemetry.get("heightMSL (m)", 0))
+            alt = float(telemetry.get("altitude (m)", 0))
+            spd = float(telemetry.get("speed (m/s)", 0))
+        except Exception:
+            return
+        self.times.append(t)
+        self.linAccel_x.append(ax)
+        self.linAccel_y.append(ay)
+        self.linAccel_z.append(az)
+        self.absAccel_x.append(aax)
+        self.absAccel_y.append(aay)
+        self.absAccel_z.append(aaz)
+        self.gyro_x.append(gx)
+        self.gyro_y.append(gy)
+        self.gyro_z.append(gz)
+        self.altitudeGPS.append(altGPS)
+        self.altitude.append(alt)
+        self.gps_speed.append(spd)
+        if self.times:
+            t_max = self.times[-1]
+            t_min = t_max - 10000
+            idx = 0
+            while idx < len(self.times) and self.times[idx] < t_min:
+                idx += 1
+            self.times = self.times[idx:]
+            self.linAccel_x = self.linAccel_x[idx:]
+            self.linAccel_y = self.linAccel_y[idx:]
+            self.linAccel_z = self.linAccel_z[idx:]
+            self.absAccel_x = self.absAccel_x[idx:]
+            self.absAccel_y = self.absAccel_y[idx:]
+            self.absAccel_z = self.absAccel_z[idx:]
+            self.gyro_x = self.gyro_x[idx:]
+            self.gyro_y = self.gyro_y[idx:]
+            self.gyro_z = self.gyro_z[idx:]
+            self.altitudeGPS = self.altitudeGPS[idx:]
+            self.altitude = self.altitude[idx:]
+            self.gps_speed = self.gps_speed[idx:]
+    def update_plots(self):
+        if self.times:
+            t_sec = [tt/1000.0 for tt in self.times]
+            self.curve_lin_x.setData(t_sec, self.linAccel_x)
+            self.curve_lin_y.setData(t_sec, self.linAccel_y)
+            self.curve_lin_z.setData(t_sec, self.linAccel_z)
+            self.curve_abs_x.setData(t_sec, self.absAccel_x)
+            self.curve_abs_y.setData(t_sec, self.absAccel_y)
+            self.curve_abs_z.setData(t_sec, self.absAccel_z)
+            self.curve_gyro_x.setData(t_sec, self.gyro_x)
+            self.curve_gyro_y.setData(t_sec, self.gyro_y)
+            self.curve_gyro_z.setData(t_sec, self.gyro_z)
+            self.curve_altGPS.setData(t_sec, self.altitudeGPS)
+            self.curve_relAlt.setData(t_sec, self.altitude)
+            self.curve_speed.setData(t_sec, self.gps_speed)
+
+# Combined main window
+class MainWindowCombined(QtWidgets.QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(WINDOW_TITLE)
+        self.resize(1400,900)
+        self.ser = None
+        self.readerThread = None
+        self.logFile = None
+        self.current_state = "N/A"  # Global state
+        # Variables for multi-line calibration packet
+        self.calib_buffer = None
+        self.calib_rssi = None
+        self.calib_snr = None
+        # Shared signals
+        self.telemetrySignals = TelemetrySignals()
+        # Calibration data
+        self.calib_data = {}
+        # Tabs
+        self.tabRight = QTabWidget()
+        self.glModelWidget = GLModelWidget()
+        self.cesiumMapWidget = CesiumMapWidget()
+        self.graphWidget = GraphWidget()
+        self.tabRight.addTab(self.glModelWidget, TAB_3D_ORIENTATION)
+        self.tabRight.addTab(self.cesiumMapWidget, TAB_GPS)
+        self.tabRight.addTab(self.graphWidget, TAB_GRAPH)
+        self.initUI()
+        self.populate_com_ports()  # Initial update
+        # Timer to refresh COM ports list
+        self.com_ports_timer = QtCore.QTimer(self)
+        self.com_ports_timer.timeout.connect(self.populate_com_ports)
+        self.com_ports_timer.start(COM_PORT_UPDATE_INTERVAL)
+        self.simulation_index = 1
+        self.simulation_timer = None
+        self.simulation_altitude = 0
+        self.apo = False
+        # Connections
+        self.telemetrySignals.telemetryParsed.connect(self.update_telemetry)
+        self.telemetrySignals.stateUpdate.connect(self.update_state)
+        self.telemetrySignals.calibrationUpdate.connect(self.update_calibration)
+        self.telemetrySignals.rawMessage.connect(self.append_raw_message)
+        self.telemetrySignals.telemetryParsed.connect(self.update_3d_orientation)
+        self.telemetrySignals.telemetryParsed.connect(self.graphWidget.update_data)
+
+    def initUI(self):
+        centralWidget = QtWidgets.QWidget()
+        self.setCentralWidget(centralWidget)
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        leftWidget = QtWidgets.QWidget()
+        leftLayout = QtWidgets.QVBoxLayout(leftWidget)
+        # Connection area
+        topLayout = QtWidgets.QHBoxLayout()
+        lbl_port = QtWidgets.QLabel(LABEL_PORT)
+        self.combo_com_ports = QtWidgets.QComboBox()
+        self.btn_connect = QtWidgets.QPushButton(BUTTON_CONNECT_TEXT)
+        self.btn_connect.clicked.connect(self.connect_serial)
+        self.btn_disconnect = QtWidgets.QPushButton(BUTTON_DISCONNECT_TEXT)
+        self.btn_disconnect.clicked.connect(self.disconnect_serial)
+        self.btn_disconnect.setEnabled(False)
+        topLayout.addWidget(lbl_port)
+        topLayout.addWidget(self.combo_com_ports)
+        topLayout.addWidget(self.btn_connect)
+        topLayout.addWidget(self.btn_disconnect)
+        leftLayout.addLayout(topLayout)
+        self.lbl_stateMachine = QtWidgets.QLabel(LABEL_STATE)
+        leftLayout.addWidget(self.lbl_stateMachine)
+        # RSSI and Snr labels (displayed at top)
+        self.lbl_RSSI = QtWidgets.QLabel("RSSI: N/A")
+        self.lbl_Snr = QtWidgets.QLabel("Snr: N/A")
+        leftLayout.addWidget(self.lbl_RSSI)
+        leftLayout.addWidget(self.lbl_Snr)
+        # Calibration box
+        self.groupCalibration = QtWidgets.QGroupBox(GROUP_CALIBRATION_TITLE)
+        calibFormLayout = QtWidgets.QFormLayout()
+        self.lbl_system = QtWidgets.QLabel("N/A")
+        self.lbl_gyro = QtWidgets.QLabel("N/A")
+        self.lbl_accel = QtWidgets.QLabel("N/A")
+        self.lbl_mag = QtWidgets.QLabel("N/A")
+        calibFormLayout.addRow("System:", self.lbl_system)
+        calibFormLayout.addRow("Gyro:", self.lbl_gyro)
+        calibFormLayout.addRow("Accel:", self.lbl_accel)
+        calibFormLayout.addRow("Mag:", self.lbl_mag)
+        self.calibText = QtWidgets.QPlainTextEdit()
+        self.calibText.setReadOnly(True)
+        calibLayout = QtWidgets.QVBoxLayout()
+        calibLayout.addLayout(calibFormLayout)
+        calibLayout.addWidget(QtWidgets.QLabel("Configuration & Offsets:"))
+        calibLayout.addWidget(self.calibText)
+        self.groupCalibration.setLayout(calibLayout)
+        leftLayout.addWidget(self.groupCalibration)
+        # Telemetry box
+        self.groupTelemetry = QtWidgets.QGroupBox(GROUP_TELEMETRY_TITLE)
+        self.telemetryLayout = QtWidgets.QFormLayout()
+        self.telemetryLabels = {}
+        self.groupTelemetry.setLayout(self.telemetryLayout)
+        leftLayout.addWidget(self.groupTelemetry)
+        self.setup_telemetry_ui(HEADER_FIELDS)
+        # Display according to global state
+        if self.current_state.upper() == "IMUCALIB":
+            self.groupCalibration.setVisible(True)
+            self.groupTelemetry.setVisible(False)
+        else:
+            self.groupCalibration.setVisible(False)
+            self.groupTelemetry.setVisible(True)
+        self.terminal = QtWidgets.QPlainTextEdit()
+        self.terminal.setReadOnly(True)
+        leftLayout.addWidget(self.terminal)
+        # Buttons
+        btnLayout = QtWidgets.QHBoxLayout()
+        self.btn_launch = QtWidgets.QPushButton(BUTTON_LAUNCH_TEXT)
+        self.btn_launch.clicked.connect(self.launch_command)
+        self.btn_simulate = QtWidgets.QPushButton(BUTTON_SIMULATE_TEXT)
+        self.btn_simulate.clicked.connect(self.simulate_launch)
+        self.btn_restart = QtWidgets.QPushButton(BUTTON_RESTART_TEXT)
+        self.btn_restart.clicked.connect(self.restart_command)
+        btnLayout.addWidget(self.btn_launch)
+        btnLayout.addWidget(self.btn_simulate)
+        btnLayout.addWidget(self.btn_restart)
+        leftLayout.addLayout(btnLayout)
+        splitter.addWidget(leftWidget)
+        splitter.addWidget(self.tabRight)
+        splitter.setSizes([700,500])
+        mainLayout = QtWidgets.QHBoxLayout(centralWidget)
+        mainLayout.addWidget(splitter)
+
+    def populate_com_ports(self):
+        self.combo_com_ports.clear()
+        ports = list_ports.comports()
+        for port in ports:
+            self.combo_com_ports.addItem(port.device)
+        if self.combo_com_ports.count() == 0:
+            self.terminal.appendPlainText("No COM port detected.")
+
+    def connect_serial(self):
+        port = self.combo_com_ports.currentText()
+        try:
+            self.ser = serial.Serial(port, SERIAL_BAUDRATE, timeout=1)
+            self.terminal.appendPlainText("Connected to " + port)
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.logFile = open(f"Log/serial_log_{timestamp}.txt", "a", encoding="utf-8")
+            self.logFile.write("=== Log started at " + str(datetime.datetime.now()) + " ===\n")
+            self.logFile.flush()
+            self.setup_telemetry_ui(HEADER_FIELDS)
+            self.readerThread = SerialReader(self.ser)
+            self.readerThread.new_message.connect(self.handle_message)
+            self.readerThread.start()
+            self.btn_connect.setEnabled(False)
+            self.btn_disconnect.setEnabled(True)
+        except Exception as e:
+            self.terminal.appendPlainText("Connection error: " + str(e))
+            self.ser = None
+
+    @QtCore.pyqtSlot(str)
+    def handle_message(self, msg):
+        self.telemetrySignals.rawMessage.emit(msg)
+        
+        # Processing new RSSI/SNR format: "RSSI: -23 dBm, SNR: 5.25 dB"
+        if msg.startswith("RSSI:") and ("SNR:" in msg or "Snr:" in msg):
+            # Extract RSSI and SNR from full format
+            parts = msg.split(",")
+            if len(parts) >= 2:
+                rssi_part = parts[0].strip()  # "RSSI: -23 dBm"
+                snr_part = parts[1].strip()   # "SNR: 5.25 dB" or "Snr: 5.25 dB"
+                
+                # Extract numeric values
+                rssi_value = rssi_part.split(":")[1].replace("dBm", "").strip()
+                if "SNR:" in snr_part:
+                    snr_value = snr_part.split("SNR:")[1].replace("dB", "").strip()
+                else:
+                    snr_value = snr_part.split("Snr:")[1].replace("dB", "").strip()
+                
+                self.lbl_RSSI.setText(f"RSSI: {rssi_value}")
+                self.lbl_Snr.setText(f"Snr: {snr_value}")
+                
+                # Calibration handling if needed
+                if self.calib_buffer is not None:
+                    packet = self.calib_buffer.strip() + " " + "RSSI: " + rssi_value + " " + "Snr: " + snr_value
+                    self.process_calib_packet(packet)
+                    self.calib_buffer = None
+                    self.calib_rssi = None
+                    self.calib_snr = None
+            return
+
+        # If message starts with RSSI alone (old format)
+        if msg.startswith("RSSI:") and "SNR:" not in msg and "Snr:" not in msg:
+            value = msg.split(":", 1)[1].strip()
+            self.lbl_RSSI.setText("RSSI: " + value)
+            if self.calib_buffer is not None:
+                self.calib_rssi = value
+                if self.calib_rssi is not None and self.calib_snr is not None:
+                    packet = self.calib_buffer.strip() + " " + "RSSI: " + self.calib_rssi + " " + "Snr: " + self.calib_snr
+                    self.process_calib_packet(packet)
+                    self.calib_buffer = None
+                    self.calib_rssi = None
+                    self.calib_snr = None
+            return
+
+        # If message starts with Snr alone (old format)
+        if msg.startswith("Snr:") or msg.startswith("SNR:"):
+            value = msg.split(":", 1)[1].strip()
+            self.lbl_Snr.setText("Snr: " + value)
+            if self.calib_buffer is not None:
+                self.calib_snr = value
+                if self.calib_rssi is not None and self.calib_snr is not None:
+                    packet = self.calib_buffer.strip() + " " + "RSSI: " + self.calib_rssi + " " + "Snr: " + self.calib_snr
+                    self.process_calib_packet(packet)
+                    self.calib_buffer = None
+                    self.calib_rssi = None
+                    self.calib_snr = None
+            return
+
+        # Processing messages starting with "Telem:" (unchanged)
+        if msg.startswith("Telem:") or msg.startswith("Serial:"):
+            # If message contains "State:IMUCALIB", it's the start of a calibration packet
+            # Detection is done by removing spaces to ensure accuracy
+            if "State:IMUCALIB" in msg.replace(" ", "") or "State:IMUCALIB" in msg:
+                self.current_state = "IMUCALIB"
+                self.update_state("IMUCALIB")
+                self.calib_buffer = msg  # Store first calibration line
+                self.calib_rssi = None
+                self.calib_snr = None
+                return
+            # If message contains a comma, it's a classic CSV packet
+            if "," in msg:
+                worker = TelemetryWorker(msg, self.telemetrySignals)
+                QtCore.QThreadPool.globalInstance().start(worker)
+            else:
+                # If global state is IMUCALIB, process message without comma as calibration
+                if self.current_state.strip() == "IMUCALIB":
+                    if data_str.startswith("Telem:"):
+                        data_str = data_str[len("Telem:"):].strip()
+                    if data_str.startswith("Serial:"):
+                        data_str = data_str[len("Serial:"):].strip()
+                    tokens = data_str.split()
+                    for i in range(0, len(tokens)-1, 2):
+                        key = tokens[i].replace(":", "").strip()
+                        value = tokens[i+1].strip()
+                        self.calib_data[key] = value
+                        if key == "Sys":
+                            self.lbl_system.setText(value)
+                        elif key == "Gyro":
+                            self.lbl_gyro.setText(value)
+                        elif key == "Accel":
+                            self.lbl_accel.setText(value)
+                        elif key == "Mag":
+                            self.lbl_mag.setText(value)
+                else:
+                    worker = TelemetryWorker(msg, self.telemetrySignals)
+                    QtCore.QThreadPool.globalInstance().start(worker)
+            return
+
+    def process_calib_packet(self, packet):
+        # Example reconstructed packet:
+        # "State:IMUCALIB Sys: 0 Gyro: 3 Accel: 0 Mag: 0 RSSI: -20 Snr: 5.75"
+        data_str = packet.strip()
+        if data_str.startswith("Telem:"):
+            data_str = data_str[len("Telem:"):].strip()
+        if data_str.startswith("Serial:"):
+            data_str = data_str[len("Serial:"):].strip()
+        # Extract with regex
+        pattern = re.compile(r'(\w+):\s*([-\w\.]+)')
+        matches = pattern.findall(data_str)
+        calib_dict = {}
+        for key, val in matches:
+            calib_dict[key] = val
+        if "Sys" in calib_dict:
+            self.lbl_system.setText(calib_dict["Sys"])
+        if "Gyro" in calib_dict:
+            self.lbl_gyro.setText(calib_dict["Gyro"])
+        if "Accel" in calib_dict:
+            self.lbl_accel.setText(calib_dict["Accel"])
+        if "Mag" in calib_dict:
+            self.lbl_mag.setText(calib_dict["Mag"])
+        self.calib_data.update(calib_dict)
+
+    def disconnect_serial(self):
+        if self.readerThread:
+            self.readerThread.stop()
+            self.readerThread = None
+        if self.ser:
+            self.ser.close()
+            self.ser = None
+            self.terminal.appendPlainText("Disconnected from serial port.")
+        if self.logFile:
+            self.logFile.write("=== Log ended at " + str(datetime.datetime.now()) + " ===\n")
+            self.logFile.close()
+            self.logFile = None
+        self.btn_connect.setEnabled(True)
+        self.btn_disconnect.setEnabled(False)
+
+    @QtCore.pyqtSlot(list)
+    def setup_telemetry_ui(self, fields):
+        global header_fields
+        header_fields = list(fields) if isinstance(fields, list) else HEADER_FIELDS.copy()
+        while self.telemetryLayout.count():
+            item = self.telemetryLayout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+        self.telemetryLabels = {}
+        for field in header_fields:
+            label = QtWidgets.QLabel("N/A")
+            self.telemetryLabels[field] = label
+            self.telemetryLayout.addRow(field + ":", label)
+        self.groupTelemetry.update()
+
+    @QtCore.pyqtSlot(dict)
+    def update_telemetry(self, telemetry):
+        if "State" in telemetry:
+            state_val = telemetry["State"].strip()
+            self.current_state = state_val
+            self.lbl_stateMachine.setText("State Machine: " + state_val)
+            if state_val.upper() == "IMUCALIB":
+                self.groupCalibration.setVisible(True)
+                self.groupTelemetry.setVisible(False)
+            else:
+                self.groupCalibration.setVisible(False)
+                self.groupTelemetry.setVisible(True)
+        for key, value in telemetry.items():
+            if key in self.telemetryLabels:
+                self.telemetryLabels[key].setText(value)
+        if "latitude (°)" in telemetry and "longitude (°)" in telemetry and "heightMSL (m)" in telemetry:
+            try:
+                lat = float(telemetry["latitude (°)"])
+                lon = float(telemetry["longitude (°)"])
+                alt = float(telemetry["heightMSL (m)"])
+                self.cesiumMapWidget.updateMarker(lat, lon, alt)
+            except Exception:
+                pass
+
+    @QtCore.pyqtSlot(str)
+    def update_state(self, stateMsg):
+        self.current_state = stateMsg
+        self.lbl_stateMachine.setText("State Machine: " + stateMsg)
+        if stateMsg.upper() == "IMUCALIB":
+            self.groupCalibration.setVisible(True)
+            self.groupTelemetry.setVisible(False)
+        else:
+            self.groupCalibration.setVisible(False)
+            self.groupTelemetry.setVisible(True)
+
+    @QtCore.pyqtSlot(dict)
+    def update_calibration(self, calib_data):
+        if "Sys" in calib_data:
+            self.lbl_system.setText(calib_data["Sys"])
+        if "Gyro" in calib_data:
+            self.lbl_gyro.setText(calib_data["Gyro"])
+        if "Accel" in calib_data:
+            self.lbl_accel.setText(calib_data["Accel"])
+        if "Mag" in calib_data:
+            self.lbl_mag.setText(calib_data["Mag"])
+        lines = [f"{k}: {v}" for k, v in calib_data.items() if k not in ("RSSI", "Snr")]
+        self.calibText.setPlainText("\n".join(lines))
+
+    @QtCore.pyqtSlot(str)
+    def append_raw_message(self, msg):
+        self.terminal.appendPlainText(msg)
+        if self.logFile:
+            self.logFile.write(msg + "\n")
+            self.logFile.flush()
+            
+    @QtCore.pyqtSlot(dict)
+    def update_3d_orientation(self, telemetry):
+        try:
+            w = float(telemetry.get("quat_w", 1))
+            x = float(telemetry.get("quat_x", 0))
+            y = float(telemetry.get("quat_y", 0))
+            z = float(telemetry.get("quat_z", 0))
+            self.glModelWidget.updateOrientation({"quat_w": w, "quat_x": x, "quat_y": y, "quat_z": z})
+        except Exception as e:
+            print("3D update error:", e)
+
+    def launch_command(self):
+        if self.ser:
+            try:
+                self.ser.reset_input_buffer()
+                self.ser.write(LAUNCH_COMMAND)
+                self.terminal.appendPlainText("Launch command sent.")
+                if self.logFile:
+                    self.logFile.write("Launch command sent.\n")
+                    self.logFile.flush()
+            except Exception as e:
+                self.terminal.appendPlainText("Error sending command: " + str(e))
+        else:
+            self.terminal.appendPlainText("Serial port not connected.")
+
+    def restart_command(self):
+        if self.current_state.lower() == "recovery":
+            if self.ser:
+                try:
+                    self.ser.write(RESTART_COMMAND)
+                    self.terminal.appendPlainText("'restart' command sent.")
+                    if self.logFile:
+                        self.logFile.write("'restart' command sent.\n")
+                        self.logFile.flush()
+                except Exception as e:
+                    self.terminal.appendPlainText("Error sending 'restart' command: " + str(e))
+            else:
+                self.terminal.appendPlainText("Serial port not connected.")
+        else:
+            self.terminal.appendPlainText("The 'restart' command can only be sent in Recovery state.")
+
+    def simulate_launch(self):
+        self.simulation_index = 1
+        self.simulation_alt = 700
+        if self.simulation_timer is None:
+            self.simulation_timer = QtCore.QTimer(self)
+            self.simulation_timer.timeout.connect(self.simulation_step)
+        self.simulation_timer.start(SIMULATION_INTERVAL)
+
+    def simulation_step(self):
+        max_index = 100
+        self.simulation_index += 1
+        if self.simulation_index > max_index:
+            self.simulation_timer.stop()
+            return
+        if self.simulation_altitude > 50000 or self.apo:
+            self.simulation_altitude -= 1000
+            self.apo = True
+        else:
+            self.simulation_altitude += 1000
+        lat = 46.806 - 0.07 * self.simulation_index
+        lon = 7.161 - 0.845 * self.simulation_index
+        fields = [
+            str(self.simulation_index),                    # Number
+            str(self.simulation_index * 100),              # Time(ms)
+            SIMULATION_STATE,                              # State
+            "0", "0", "9.8",                              # linAccel_x,y,z (m/s²)
+            "0", "0", "9.8",                              # absAccel_x,y,z (m/s²)  
+            "0", "0", "0",                                # gyro_x,y,z (°/s)
+            "0", "0", "0",                                # euler_x,y,z (°)
+            "1", "0", "0", "0",                           # quat_w,x,y,z
+            "0", "0", "0",                                # eulerOffset_x,y,z (°)
+            "0",                                          # deviationAngle (°)
+            str(self.simulation_altitude), "0", "1013", "25",  # altitude, relativeAltitude, pressure, temp
+            "12.5", "0", "0", "0",                        # voltage, contPyro1, contPyro2, chuteCheckIn
+            "3D",                                         # fixDesc
+            "1",                                          # solutionValid
+            "8",                                          # satellites
+            str(lon),                                     # longitude (°)
+            str(lat),                                     # latitude (°)
+            str(self.simulation_altitude + 50),           # heightEllipsoid (m)
+            str(self.simulation_altitude),                # heightMSL (m)
+            "1.2",                                        # hdop
+            "50.5",                                       # speed (m/s)
+            "45.0",                                       # heading (°)
+            "20241201",                                   # date (YYYYMMDD)
+            "120000"                                      # time (hhmmss)
+        ]
+        simulated_msg = "Telem:" + ",".join(fields)
+        self.handle_message(simulated_msg)
+        self.handle_message("RSSI: -30")
+        self.handle_message("Snr: 5.75")
+        self.terminal.appendPlainText(f"Simulation: lat={lat:.6f}, lon={lon:.6f}, alt_atmo={self.simulation_altitude:.1f}, alt_gps={self.simulation_altitude:.1f}")
+
+    def closeEvent(self, event):
+        self.disconnect_serial()
+        event.accept()
+
+def main():
+    app = QtWidgets.QApplication(sys.argv)
+    mainWin = MainWindowCombined()
+    mainWin.show()
+    sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    main()
